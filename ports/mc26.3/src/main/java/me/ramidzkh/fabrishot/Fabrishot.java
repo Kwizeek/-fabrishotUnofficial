@@ -1,0 +1,132 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2021 Ramid Khan
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+package me.ramidzkh.fabrishot;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import me.ramidzkh.fabrishot.capture.CaptureTask;
+import me.ramidzkh.fabrishot.config.Config;
+import me.ramidzkh.fabrishot.event.ScreenshotSaveCallback;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.minecraft.ChatFormatting;
+import net.minecraft.util.Util;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public class Fabrishot {
+
+    public static final KeyMapping SCREENSHOT_BINDING = new KeyMapping(
+            "key.fabrishot.screenshot",
+            InputConstants.Type.KEYBOARD,
+            InputConstants.KEY_F9,
+            KeyMapping.Category.MISC);
+
+    private static CaptureTask task;
+
+    private static void printFileLink(Path path) {
+        Minecraft minecraft = Minecraft.getInstance();
+
+        Component fileText = Component.literal(path.toFile().getName())
+                .withStyle(ChatFormatting.UNDERLINE)
+                .withStyle(style -> style.withClickEvent(new ClickEvent.OpenFile(path)));
+        minecraft.execute(() -> {
+            Component message = Component.translatable("screenshot.success", fileText);
+
+            minecraft.gui.hud.getChat().addClientSystemMessage(message);
+            minecraft.getNarrator().saySystemQueued(message);
+        });
+    }
+
+    public static void initialize() {
+        KeyMappingHelper.registerKeyMapping(SCREENSHOT_BINDING);
+        ScreenshotSaveCallback.EVENT.register(Fabrishot::printFileLink);
+    }
+
+    public static void startCapture() {
+        Minecraft minecraft = Minecraft.getInstance();
+
+        if (task == null) {
+            task = new CaptureTask(minecraft, getScreenshotFile(minecraft));
+            task.setResolution(Config.CAPTURE_WIDTH, Config.CAPTURE_HEIGHT);
+            refresh();
+        }
+    }
+
+    public static void onRenderPreOrPost() {
+        if (task != null && task.onRenderTick()) {
+            task.restoreResolution();
+            task = null;
+            refresh();
+        }
+    }
+
+    private static void refresh() {
+        Minecraft.getInstance().resizeGui();
+    }
+
+    private static Path getScreenshotFile(Minecraft client) {
+        Path dir = client.gameDirectory.toPath().resolve("screenshots");
+
+        try {
+            if (!Files.exists(dir)) {
+                Files.createDirectories(dir);
+            }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+
+        String world = null;
+
+        if (client.getSingleplayerServer() != null) {
+            world = client.getSingleplayerServer().getWorldData().getLevelName();
+        } else if (client.getCurrentServer() != null) {
+            world = client.getCurrentServer().name;
+        }
+
+        Path file;
+        String prefix = Config.CUSTOM_FILE_NAME
+                .replace("%time%", Util.getFilenameFormattedDateTime())
+                .replace("%world%", world != null ? world : "no_world");
+
+        // loop though suffixes while the file exists
+        int i = 1;
+
+        do {
+            file = dir.resolve(prefix + (i++ == 1 ? "" : "_" + i) + Config.CAPTURE_FILE_FORMAT.extension());
+        } while (Files.exists(file));
+
+        return file;
+    }
+
+    public static boolean isInCapture() {
+        return task != null;
+    }
+}
